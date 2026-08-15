@@ -1,6 +1,12 @@
-torch
+# torch is intentionally omitted: the runpod/pytorch base image already
+# ships a matching torch+CUDA build, so pinning it here would only risk
+# pip deciding to fetch another multi-GB wheel for no benefit.
 transformers>=4.36.0
 parler_tts @ git+https://github.com/huggingface/parler-tts.git
 soundfile
 numpy
 runpod
+# Rust-based accelerated Hugging Face downloads (HF_HUB_ENABLE_HF_TRANSFER=1
+# in the Dockerfile) -- meaningfully cuts the build-time model download
+# against RunPod's 30-minute build timeout.
+hf_transfer

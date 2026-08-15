@@ -14,7 +14,9 @@ ENV PYTHONUNBUFFERED=1 \
 ENV HF_HOME=/app/hf_cache \
     TRANSFORMERS_CACHE=/app/hf_cache
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg \
+# git is required for the parler_tts git+https install below. ffmpeg is
+# NOT needed: soundfile reads/writes WAV via bundled libsndfile, not ffmpeg.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -22,6 +24,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 COPY handler.py .
+
+# The model + its flan-t5-large description encoder together are a real
+# multi-GB download, against RunPod's documented 30-minute build timeout --
+# hf_transfer's Rust-based downloader is enabled just for this step to stay
+# well inside that budget.
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Download the model + both tokenizers ONCE, at build time, into HF_HOME.
 # This layer is cached in the final image, so no worker ever downloads

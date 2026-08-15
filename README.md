@@ -191,14 +191,31 @@ GPU memory across invocations on the same warm worker. This is separate
 from the "no re-download" guarantee above but equally important for
 cold-start latency.
 
-**Future alternative — network volume:** if you later want to host
-multiple large models and don't want each baked into its own image, RunPod
-supports a network-volume cache instead. In that setup the model would be
-expected under `/runpod-volume/huggingface-cache/hub/` per RunPod's
-model-caching convention, and the Dockerfile's build-time download step
-would be dropped in favor of a mounted volume. That is **not** what this
-repo does by default — for a single ~2–4GB model, baking into the image is
-simpler and is what's implemented here.
+**Build-time budget:** RunPod's GitHub-integration build step has a
+documented **30-minute timeout**. `ai4bharat/indic-parler-tts` plus its
+frozen `flan-t5-large` description encoder (770M params) is a genuinely
+multi-GB download (roughly 6–8GB), on top of the base image pull and
+dependency install — tight but normally within budget. `requirements.txt`
+includes `hf_transfer`, and the Dockerfile sets
+`HF_HUB_ENABLE_HF_TRANSFER=1` right before the build-time download step,
+which uses a Rust-based downloader that's meaningfully faster than the
+default on high-bandwidth networks. `torch` is deliberately **not** listed
+in `requirements.txt` — the `runpod/pytorch` base image already ships a
+matching torch+CUDA build, so pinning it again would risk pip fetching
+another multi-GB wheel for no benefit.
+
+**If the build still times out:** per RunPod's own docs, the two
+supported paths are (1) pre-build the image locally/in CI and push it to
+a container registry instead of using GitHub-integration builds, or
+(2) switch from baking the model into the image to a **network volume**
+cache. In that setup the model would be expected under
+`/runpod-volume/huggingface-cache/hub/` per RunPod's model-caching
+convention, `tts_engine.load_model()` would allow a network fetch on
+first cold start instead of running `HF_HUB_OFFLINE=1` unconditionally,
+and the Dockerfile's build-time download step would be dropped entirely.
+That's a real architecture change (slower first cold start, a network
+volume to attach in the console) and is **not** implemented here — baking
+into the image remains this repo's default.
 
 ---
 
