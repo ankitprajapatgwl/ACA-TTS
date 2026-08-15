@@ -189,6 +189,9 @@ into the image).
    RunPod endpoints (direct and streaming) — see
    [Deploying two endpoints](#deploying-two-endpoints-from-one-repo).
 
+Full step-by-step walkthrough and troubleshooting table:
+see **[`HF_TOKEN_SETUP.md`](./HF_TOKEN_SETUP.md)**.
+
 Without `HF_TOKEN` set, the worker will fail to start (the gated
 download is rejected), which is intentional — a fast, loud failure at
 startup rather than a confusing error on the first request.
@@ -388,5 +391,6 @@ indic-tts-runpod/
 ├── requirements.txt
 ├── test_input_direct.json
 ├── test_input_streaming.json
-└── README.md
+├── README.md
+└── HF_TOKEN_SETUP.md          # step-by-step: HF token + RunPod env var setup
 ```
