@@ -67,4 +67,8 @@ def handler_direct(job):
         return {"error": str(exc), "endpoint_type": "direct"}
 
 
-runpod.serverless.start({"handler": handler_direct})
+if __name__ == "__main__":
+    # Standalone/local-testing entrypoint (`python src/handler_direct.py`).
+    # The container's actual entrypoint is the root-level handler.py, which
+    # imports handler_direct without triggering this block.
+    runpod.serverless.start({"handler": handler_direct})

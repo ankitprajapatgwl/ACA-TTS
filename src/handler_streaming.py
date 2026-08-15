@@ -102,7 +102,11 @@ def handler_streaming(job):
     }
 
 
-runpod.serverless.start({
-    "handler": handler_streaming,
-    "return_aggregate_stream": True,
-})
+if __name__ == "__main__":
+    # Standalone/local-testing entrypoint (`python src/handler_streaming.py`).
+    # The container's actual entrypoint is the root-level handler.py, which
+    # imports handler_streaming without triggering this block.
+    runpod.serverless.start({
+        "handler": handler_streaming,
+        "return_aggregate_stream": True,
+    })

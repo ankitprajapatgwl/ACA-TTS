@@ -21,6 +21,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+COPY handler.py .
 
 # Download the model + both tokenizers ONCE, at build time, into HF_HOME.
 # This layer is cached in the final image, so no worker ever downloads
@@ -41,11 +42,11 @@ ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
 # Per-endpoint switch: each RunPod endpoint built from this same repo sets
-# its own HANDLER_TYPE env var (direct | streaming) to pick its entrypoint.
+# its own HANDLER_TYPE env var (direct | streaming). handler.py reads it
+# and picks the right handler in Python.
 ENV HANDLER_TYPE=direct
 
-CMD if [ "$HANDLER_TYPE" = "streaming" ]; then \
-      python src/handler_streaming.py; \
-    else \
-      python src/handler_direct.py; \
-    fi
+# A single, static exec-form CMD pointing at one file -- unlike a shell
+# `if/then/else` CMD, this is trivially resolvable by RunPod's deploy-time
+# check for runpod.serverless.start(), which handler.py always calls.
+CMD ["python", "-u", "handler.py"]

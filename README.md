@@ -7,7 +7,7 @@ build/push).
 
 One repo, one Dockerfile, **two RunPod endpoints**:
 
-| Endpoint | Entrypoint | Behavior |
+| Endpoint | Handler function | Behavior |
 |---|---|---|
 | **Direct** | `src/handler_direct.py` | Waits for generation, returns one complete JSON response with the full WAV as base64. |
 | **Streaming** | `src/handler_streaming.py` | Generator handler — yields a status object, then sequential base64 audio chunks, then a completion object. |
@@ -15,9 +15,23 @@ One repo, one Dockerfile, **two RunPod endpoints**:
 Both endpoints share the same model-loading and generation code
 (`src/tts_engine.py`) and the same voice preset system
 (`src/voice_presets.py`); only response shape/timing differs. Which
-entrypoint a given RunPod endpoint runs is selected purely by the
+handler a given RunPod endpoint runs is selected purely by the
 `HANDLER_TYPE` environment variable set on that endpoint (`direct` or
 `streaming`) — see [Deploying two endpoints](#deploying-two-endpoints-from-one-repo).
+
+The container's actual entrypoint is the single root-level `handler.py`.
+It reads `HANDLER_TYPE` and imports the matching handler module, and it's
+the one place `runpod.serverless.start()` is called inside the built
+image. This exists specifically so RunPod's GitHub deploy-time check has
+one static file to resolve: a Dockerfile `CMD` that shell-branches
+between two files (`if [ "$HANDLER_TYPE" = ... ]`) gives that check
+nothing concrete to point at, which can surface as a false
+"`runpod.serverless.start()` handler not found" error even though the
+call exists in the repo. `src/handler_direct.py` and
+`src/handler_streaming.py` each still call `runpod.serverless.start()`
+themselves too, guarded behind `if __name__ == "__main__":`, so either
+can also be run standalone for local testing
+(`python src/handler_direct.py test_input_direct.json`).
 
 Input/output is JSON. Voices are selected via a small **preset system**
 built only from the model's real, official named speakers (see
@@ -327,9 +341,10 @@ print(run_request.status())
 
 ```
 indic-tts-runpod/
+├── handler.py                 # container entrypoint: picks a handler by HANDLER_TYPE
 ├── src/
-│   ├── handler_direct.py      # direct endpoint entrypoint
-│   ├── handler_streaming.py   # streaming endpoint entrypoint
+│   ├── handler_direct.py      # direct endpoint handler
+│   ├── handler_streaming.py   # streaming endpoint handler
 │   ├── tts_engine.py          # shared model load + generation core
 │   └── voice_presets.py       # preset table + description resolution
 ├── Dockerfile                 # single Dockerfile for both endpoints
