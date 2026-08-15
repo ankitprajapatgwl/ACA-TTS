@@ -1,0 +1,7 @@
+{
+  "input": {
+    "text": "शिक्षा बहुत महत्वपूर्ण है।",
+    "preset_key": "hindi_female_teacher",
+    "chunk_size_kb": 256
+  }
+}

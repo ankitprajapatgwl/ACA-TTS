@@ -1,0 +1,6 @@
+torch
+transformers>=4.36.0
+parler_tts @ git+https://github.com/huggingface/parler-tts.git
+soundfile
+numpy
+runpod
