@@ -167,55 +167,62 @@ for one of these languages if you want it; it is not applied by default.
 
 ---
 
-## Model caching (no re-download per run)
+## Model caching
 
-**Default/primary approach for this build:** the model and both
-tokenizers are downloaded **once, at Docker build time**, into a fixed
-`HF_HOME=/app/hf_cache` path baked into the image layer (see the
-`Dockerfile`'s `RUN python -c "..."` step). `ENV HF_HOME` /
-`TRANSFORMERS_CACHE` are set *before* that step so build-time caching and
-runtime loading agree on the same path.
+**`ai4bharat/indic-parler-tts` is a gated Hugging Face model** — its
+pages require accepting terms and an authenticated access token even for
+programmatic downloads. RunPod's GitHub-integration build step has no way
+to inject a secret into the build itself (and baking a token into the
+image would be a real security anti-pattern regardless), so **the model
+cannot be downloaded at Docker build time** here. This repo instead
+downloads it on first use, at container startup, authenticated with an
+`HF_TOKEN` environment variable set on the RunPod *endpoint* (injected at
+runtime only, per RunPod's own guidance on handling secrets — never baked
+into the image).
 
-At runtime, `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` are set (after
-the build-time download step, so they don't block that step itself).
-This means:
+**One-time setup you need to do:**
+1. Visit https://huggingface.co/ai4bharat/indic-parler-tts while logged
+   in and accept its terms (the gate).
+2. Create a read-scope access token at
+   https://huggingface.co/settings/tokens.
+3. Set `HF_TOKEN=<your token>` as an environment variable on **both**
+   RunPod endpoints (direct and streaming) — see
+   [Deploying two endpoints](#deploying-two-endpoints-from-one-repo).
 
-- Workers never hit the network for weights on cold start or per-request.
-- If a required file were ever missing from the image, loading fails
-  loudly and immediately instead of silently re-downloading it.
+Without `HF_TOKEN` set, the worker will fail to start (the gated
+download is rejected), which is intentional — a fast, loud failure at
+startup rather than a confusing error on the first request.
 
-The model is also loaded once at **module import time** in each handler
-file (`MODEL, TOKENIZER, ... = tts_engine.load_model()` at the top of
-`handler_direct.py` / `handler_streaming.py`), so it stays resident in
-GPU memory across invocations on the same warm worker. This is separate
-from the "no re-download" guarantee above but equally important for
-cold-start latency.
+**How caching works after that:**
+- `src/tts_engine.py` sets `HF_HOME` before importing `transformers`/
+  `parler_tts` (required, since `huggingface_hub` reads it once at
+  import time): if a RunPod **network volume** is mounted at
+  `/runpod-volume`, the cache lives at
+  `/runpod-volume/huggingface-cache` so the model downloads **once,
+  total** and every worker/cold start on that endpoint reuses it — this
+  is strongly recommended. Without a network volume, it falls back to
+  local (ephemeral) container storage at `/app/hf_cache`, meaning
+  **every new worker** re-downloads on its first request.
+- `requirements.txt` includes `hf_transfer`, and the Dockerfile sets
+  `HF_HUB_ENABLE_HF_TRANSFER=1`, so that first-use download is
+  meaningfully faster than the default downloader.
+- The model is loaded once at **module import time** in `handler.py`
+  (which imports whichever of `handler_direct.py` / `handler_streaming.py`
+  matches `HANDLER_TYPE`), so it stays resident in GPU memory across
+  invocations on the same warm worker, and isn't re-loaded per request.
 
-**Build-time budget:** RunPod's GitHub-integration build step has a
-documented **30-minute timeout**. `ai4bharat/indic-parler-tts` plus its
-frozen `flan-t5-large` description encoder (770M params) is a genuinely
-multi-GB download (roughly 6–8GB), on top of the base image pull and
-dependency install — tight but normally within budget. `requirements.txt`
-includes `hf_transfer`, and the Dockerfile sets
-`HF_HUB_ENABLE_HF_TRANSFER=1` right before the build-time download step,
-which uses a Rust-based downloader that's meaningfully faster than the
-default on high-bandwidth networks. `torch` is deliberately **not** listed
-in `requirements.txt` — the `runpod/pytorch` base image already ships a
-matching torch+CUDA build, so pinning it again would risk pip fetching
-another multi-GB wheel for no benefit.
+**Attaching a network volume:** in the RunPod console, create a Network
+Volume in the same region as your endpoint's GPU pool, then attach it to
+each endpoint (it mounts at `/runpod-volume`). Both the direct and
+streaming endpoints can share the same volume/cache.
 
-**If the build still times out:** per RunPod's own docs, the two
-supported paths are (1) pre-build the image locally/in CI and push it to
-a container registry instead of using GitHub-integration builds, or
-(2) switch from baking the model into the image to a **network volume**
-cache. In that setup the model would be expected under
-`/runpod-volume/huggingface-cache/hub/` per RunPod's model-caching
-convention, `tts_engine.load_model()` would allow a network fetch on
-first cold start instead of running `HF_HUB_OFFLINE=1` unconditionally,
-and the Dockerfile's build-time download step would be dropped entirely.
-That's a real architecture change (slower first cold start, a network
-volume to attach in the console) and is **not** implemented here — baking
-into the image remains this repo's default.
+If you'd rather avoid any runtime download entirely, the two documented
+alternatives are: pre-build the image locally/in CI (where you control
+`HF_TOKEN` via `docker build --build-arg` or `huggingface-cli login`)
+and push it to a container registry instead of using GitHub-integration
+builds, or use a non-gated model. Neither is implemented here — the
+runtime-download-plus-network-volume approach above is this repo's
+default.
 
 ---
 
@@ -284,23 +291,36 @@ is yielded and the stream ends cleanly (no raised exception).
 
 ## Deploying two endpoints from one repo
 
+0. Accept indic-parler-tts's terms on Hugging Face and create an access
+   token first — see [Model caching](#model-caching). Optionally create a
+   RunPod Network Volume too, so the model downloads once instead of
+   per worker.
 1. Push this repo to GitHub (branch `main`).
 2. In RunPod → **Serverless** → **+ New Endpoint** → **GitHub Repo** →
    select this repo → branch `main` → Dockerfile path `./Dockerfile`.
    - Name it e.g. `indic-tts-direct`.
-   - Endpoint environment variable: `HANDLER_TYPE=direct`.
+   - Endpoint environment variables: `HANDLER_TYPE=direct` and
+     `HF_TOKEN=<your Hugging Face token>`.
    - GPU: 1x A40/A6000 or similar, 16GB+ VRAM.
-   - Container disk: 20–30GB (large enough for the baked-in model).
+   - Container disk: 20–30GB (room for the model once downloaded, if not
+     using a network volume).
+   - Attach your Network Volume, if you created one.
    - Set min/max workers, deploy.
 3. Repeat **+ New Endpoint** → **GitHub Repo** → same repo, same branch.
    - Name it e.g. `indic-tts-streaming`.
-   - Endpoint environment variable: `HANDLER_TYPE=streaming`.
+   - Endpoint environment variables: `HANDLER_TYPE=streaming` and
+     `HF_TOKEN=<your Hugging Face token>`.
+   - Attach the same Network Volume as the direct endpoint, if using one,
+     so both endpoints share one downloaded copy of the model.
    - Configure GPU/worker settings independently — streaming jobs hold
      connections open longer, so consider fewer max workers.
    - Deploy.
 4. Both endpoints get distinct Endpoint IDs but track the same
    repo/branch/Dockerfile — a single `git push` to `main` triggers a
-   rebuild for both.
+   rebuild for both. The first request to each endpoint after a fresh
+   deploy will be slow (downloading the model); subsequent requests on a
+   warm worker are fast, and — if a network volume is attached — every
+   later cold start is too.
 
 ---
 
